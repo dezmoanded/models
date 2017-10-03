@@ -40,6 +40,16 @@ py_library(
 )
 
 py_library(
+    name = "fish_test_data",
+    srcs = [
+        "fish/fish_test_data.py",
+    ],
+    deps = [
+        ":dataset",
+    ],
+)
+
+py_library(
     name = "image_processing",
     srcs = [
         "image_processing.py",
@@ -80,10 +90,32 @@ py_binary(
     ],
 )
 
+py_binary(
+    name = "fish_predict",
+    srcs = [
+        "fish/fish_predict.py",
+    ],
+    deps = [
+        ":fish_test_data",
+        ":inception_predict",
+    ],
+)
+
 py_library(
     name = "inception_eval",
     srcs = [
         "inception_eval.py",
+    ],
+    deps = [
+        ":image_processing",
+        ":inception",
+    ],
+)
+
+py_library(
+    name = "inception_predict",
+    srcs = [
+        "inception_predict.py",
     ],
     deps = [
         ":image_processing",

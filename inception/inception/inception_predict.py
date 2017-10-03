@@ -26,10 +26,10 @@ import time
 
 import numpy as np
 import tensorflow as tf
+import pandas as pd
 
 from inception import image_processing
 from inception import inception_model as inception
-
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -50,6 +50,9 @@ tf.app.flags.DEFINE_integer('num_examples', 50000,
                             """ImageNet dataset contains 50000 examples.""")
 tf.app.flags.DEFINE_string('subset', 'validation',
                            """Either 'validation' or 'train'.""")
+
+tf.app.flags.DEFINE_string('output_file', '/tmp/out.csv',
+                           """Output CSV file.""")
 
 
 def _eval_once(saver, summary_writer, top_1_op, top_5_op, summary_op):
@@ -133,11 +136,13 @@ def _eval_once(saver, summary_writer, top_1_op, top_5_op, summary_op):
     coord.join(threads, stop_grace_period_secs=10)
 
 
-def evaluate(dataset):
+def predict(dataset):
   """Evaluate model on Dataset for a number of steps."""
+  pd.DataFrame([["image","ALB","BET","DOL","LAG","NoF","OTHER","SHARK","YFT"]]).to_csv(FLAGS.output_file, header=False, index=False)
+
   with tf.Graph().as_default():
     # Get images and labels from the dataset.
-    images, labels = image_processing.inputs(dataset)
+    images, labels, filenames = image_processing.inputs(dataset)
 
     # Number of classes in the Dataset label set plus 1.
     # Label 0 is reserved for an (unused) background class.
@@ -146,10 +151,6 @@ def evaluate(dataset):
     # Build a Graph that computes the logits predictions from the
     # inference model.
     logits, _ = inception.inference(images, num_classes)
-
-    # Calculate predictions.
-    top_1_op = tf.nn.in_top_k(logits, labels, 1)
-    top_5_op = tf.nn.in_top_k(logits, labels, 5)
 
     # Restore the moving average version of the learned variables for eval.
     variable_averages = tf.train.ExponentialMovingAverage(
@@ -164,8 +165,67 @@ def evaluate(dataset):
     summary_writer = tf.train.SummaryWriter(FLAGS.eval_dir,
                                             graph_def=graph_def)
 
-    while True:
-      _eval_once(saver, summary_writer, top_1_op, top_5_op, summary_op)
-      if FLAGS.run_once:
-        break
-      time.sleep(FLAGS.eval_interval_secs)
+    with tf.Session() as sess:
+      ckpt = tf.train.get_checkpoint_state(FLAGS.checkpoint_dir)
+      if ckpt and ckpt.model_checkpoint_path:
+        if os.path.isabs(ckpt.model_checkpoint_path):
+          # Restores from checkpoint with absolute path.
+          saver.restore(sess, ckpt.model_checkpoint_path)
+        else:
+          # Restores from checkpoint with relative path.
+          saver.restore(sess, os.path.join(FLAGS.checkpoint_dir,
+                                           ckpt.model_checkpoint_path))
+
+        # Assuming model_checkpoint_path looks something like:
+        #   /my-favorite-path/imagenet_train/model.ckpt-0,
+        # extract global_step from it.
+        global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+        print('Succesfully loaded model from %s at step=%s.' %
+              (ckpt.model_checkpoint_path, global_step))
+      else:
+        print('No checkpoint file found')
+        return
+
+      # Start the queue runners.
+      coord = tf.train.Coordinator()
+      try:
+        threads = []
+        for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+          threads.extend(qr.create_threads(sess, coord=coord, daemon=True,
+                                           start=True))
+
+        num_iter = int(math.ceil(FLAGS.num_examples / FLAGS.batch_size))
+        # # Counts the number of correct predictions.
+        # count_top_1 = 0.0
+        # count_top_5 = 0.0
+        total_sample_count = num_iter * FLAGS.batch_size
+        step = 0
+
+        print('%s: starting evaluation on (%s).' % (datetime.now(), FLAGS.subset))
+        start_time = time.time()
+        while step < num_iter and not coord.should_stop():
+          # top_1, top_5 = sess.run([top_1_op, top_5_op])
+          # count_top_1 += np.sum(top_1)
+          # count_top_5 += np.sum(top_5)
+
+          predictions, batch_filenames = sess.run([tf.nn.softmax(logits), filenames])
+
+          pd.DataFrame(np.concatenate([np.atleast_2d(batch_filenames).T, predictions[:,1:]], axis=1)) \
+            .to_csv(FLAGS.output_file, mode='a', header=False, index=False)
+
+          step += 1
+          if step % 20 == 0:
+            duration = time.time() - start_time
+            sec_per_batch = duration / 20.0
+            examples_per_sec = FLAGS.batch_size / sec_per_batch
+            print('%s: [%d batches out of %d] (%.1f examples/sec; %.3f'
+                  'sec/batch)' % (datetime.now(), step, num_iter,
+                                  examples_per_sec, sec_per_batch))
+            start_time = time.time()
+
+        print("Done.")
+      except Exception as e:  # pylint: disable=broad-except
+        coord.request_stop(e)
+
+      coord.request_stop()
+      coord.join(threads, stop_grace_period_secs=10)

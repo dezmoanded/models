@@ -36,7 +36,7 @@ class FishTestData(Dataset):
   def num_examples_per_epoch(self):
     """Returns the number of examples in the data subset."""
     if self.subset == 'validation':
-      return 1001
+      return 12154
 
   def download_message(self):
     """Instruction to download and extract the tarball from Flowers website."""
